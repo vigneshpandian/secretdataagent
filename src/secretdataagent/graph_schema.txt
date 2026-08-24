@@ -1,0 +1,121 @@
+// ==========================================
+// 1. CREATE TABLE NODE
+// ==========================================
+CREATE (t:Table {
+  name: "SecretTransactions",
+  description: "Contains all user financial transactions including income, expenses, credit card spends, and gold investments."
+});
+
+// ==========================================
+// 2. CREATE COLUMN NODES
+// ==========================================
+CREATE (c_pk:Column {name: "PartitionKey", dataType: "TEXT", description: "Partition key formatted as Month-Year (e.g., 'Aug-2026'). Useful for filtering by specific month-year."})
+CREATE (c_rk:Column {name: "RowKey", dataType: "TEXT", description: "Unique GUID for the row."})
+CREATE (c_cat:Column {name: "CategoryName", dataType: "TEXT", description: "Category of expense or income (e.g., Groceries, Fuel, Salary)."})
+CREATE (c_cd:Column {name: "CreatedDate", dataType: "TIMESTAMPTZ", description: "Timestamp when the record was inserted."})
+CREATE (c_email:Column {name: "Email", dataType: "TEXT", description: "Email address of the user who owns the transaction."})
+CREATE (c_fn:Column {name: "FirstName", dataType: "TEXT", description: "First name of the user."})
+CREATE (c_del:Column {name: "IsDeleted", dataType: "BOOLEAN", description: "Soft delete flag. Active records have IsDeleted = false."})
+CREATE (c_ln:Column {name: "LastName", dataType: "TEXT", description: "Last name of the user."})
+CREATE (c_lid:Column {name: "LedgerId", dataType: "TEXT", description: "Unique GUID for the ledger."})
+CREATE (c_ltype:Column {name: "LedgerType", dataType: "TEXT", description: "High-level classification of financial entry."})
+CREATE (c_md:Column {name: "ModifiedDate", dataType: "TIMESTAMPTZ", description: "Timestamp when record was last updated."})
+CREATE (c_amt:Column {name: "TransactionAmount", dataType: "NUMERIC(18,2)", description: "Monetary amount of the transaction."})
+CREATE (c_tdate:Column {name: "TransactionDate", dataType: "TIMESTAMPTZ", description: "Date and time when the transaction actually occurred."})
+CREATE (c_notes:Column {name: "TransactionNotes", dataType: "TEXT", description: "User notes or descriptions attached to the transaction."})
+CREATE (c_gold:Column {name: "GoldWeight", dataType: "NUMERIC(18,3)", description: "Weight of gold in grams for precious metal transactions."})
+CREATE (c_cc:Column {name: "IsCreditCardTransaction", dataType: "BOOLEAN", description: "Flag indicating whether transaction was paid via Credit Card."})
+CREATE (c_ebody:Column {name: "EmailBody", dataType: "TEXT", description: "Raw body text of parsed transaction email."})
+CREATE (c_eid:Column {name: "EmailId", dataType: "TEXT", description: "Unique ID of the source email."})
+CREATE (c_semail:Column {name: "SenderEmailId", dataType: "TEXT", description: "Sender address of the transaction alert email (e.g., bank email)."})
+CREATE (c_status:Column {name: "Status", dataType: "TEXT", description: "Status of the transaction processing."});
+
+// Link Columns to Table
+MATCH (t:Table {name: "SecretTransactions"})
+MATCH (c:Column)
+CREATE (t)-[:HAS_COLUMN]->(c);
+
+// ==========================================
+// 3. MAP ALLOWED VALUES FOR LOW-CARDINALITY FIELDS
+// ==========================================
+MATCH (c_ltype:Column {name: "LedgerType"})
+CREATE (v1:Value {val: "Income", meaning: "Money received"})
+CREATE (v2:Value {val: "Expense", meaning: "Money spent"})
+CREATE (v3:Value {val: "Investments", meaning: "Money invested"})
+CREATE (c_ltype)-[:HAS_ALLOWED_VALUE]->(v1)
+CREATE (c_ltype)-[:HAS_ALLOWED_VALUE]->(v2)
+CREATE (c_ltype)-[:HAS_ALLOWED_VALUE]->(v3);
+
+// ==========================================
+// 4. MAP NATURAL LANGUAGE SYNONYMS (RAG RETRIEVAL)
+// ==========================================
+MATCH (c_email:Column {name: "Email"})
+CREATE (s1:Synonym {term: "user"}), (s2:Synonym {term: "account"}), (s3:Synonym {term: "my transactions"})
+CREATE (c_email)-[:HAS_SYNONYM]->(s1), (c_email)-[:HAS_SYNONYM]->(s2), (c_email)-[:HAS_SYNONYM]->(s3);
+
+MATCH (c_amt:Column {name: "TransactionAmount"})
+CREATE (s4:Synonym {term: "spent"}), (s5:Synonym {term: "cost"}), (s6:Synonym {term: "total"}), (s7:Synonym {term: "how much"})
+CREATE (c_amt)-[:HAS_SYNONYM]->(s4), (c_amt)-[:HAS_SYNONYM]->(s5), (c_amt)-[:HAS_SYNONYM]->(s6), (c_amt)-[:HAS_SYNONYM]->(s7);
+
+MATCH (c_gold:Column {name: "GoldWeight"})
+CREATE (s8:Synonym {term: "gold bought"}), (s9:Synonym {term: "gold purchase"}), (s10:Synonym {term: "grams of gold"})
+CREATE (c_gold)-[:HAS_SYNONYM]->(s8), (c_gold)-[:HAS_SYNONYM]->(s9), (c_gold)-[:HAS_SYNONYM]->(s10);
+
+// ==========================================
+// 5. CREATE BUSINESS RULES & INTENT TEMPLATES
+// ==========================================
+
+// --- System & Global Rules ---
+CREATE (r_del:BusinessRule {
+  name: "Exclude Deleted Records",
+  type: "MANDATORY_FILTER",
+  description: "Must be applied to EVERY SQL query without exception.",
+  sqlCondition: "\"IsDeleted\" = false"
+})
+
+CREATE (r_curr_m:BusinessRule {
+  name: "Current Month Filter Strategy",
+  type: "DATE_FILTER",
+  description: "For 'this month' queries, filter using PartitionKey or TransactionDate range.",
+  sqlTemplate: "\"PartitionKey\" = TO_CHAR(CURRENT_DATE, 'Mon-YYYY')"
+})
+
+CREATE (r_inv:BusinessRule {
+  name: "Total Investments Rule",
+  intent: "Find total investments made by the user",
+  description: "When calculating total investments, filter strictly by LedgerType = 'Investments'. Use SUM(TransactionAmount) for monetary value or SUM(GoldWeight) if physical weight is requested.",
+  sqlCondition: "\"LedgerType\" = 'Investments'"
+})
+
+CREATE (r_cat_exp:BusinessRule {
+  name: "Category Expense Rule",
+  intent: "Find total expense for a specific category",
+  description: "When calculating category expenses, filter LedgerType = 'Expense' and match CategoryName (case-insensitive).",
+  sqlCondition: "\"LedgerType\" = 'Expense' AND LOWER(\"CategoryName\") = LOWER(:category_input)"
+})
+
+CREATE (r_scope:BusinessRule {
+  name: "Default Spending Scope Rule",
+  intent: "How much spent this month / general spending query",
+  description: "Unless the user explicitly specifies ONLY 'Expense' or ONLY 'Investments', total spending or 'spent this month' queries MUST include both 'Expense' and 'Investments'.",
+  sqlCondition: "\"LedgerType\" IN ('Expense', 'Investments')"
+})
+
+CREATE (r_null_safe:BusinessRule {
+  name: "Null Handling Guardrail",
+  type: "SQL_FORMATTING",
+  description: "Always wrap monetary aggregation functions in COALESCE to prevent NULL output when no matching rows exist.",
+  sqlTemplate: "COALESCE(SUM(\"TransactionAmount\"), 0)"
+})
+
+CREATE (r_gold_metric:BusinessRule {
+  name: "Gold Metric Disambiguation",
+  intent: "Gold purchases and holdings",
+  description: "If the user asks for 'grams of gold' or 'gold quantity', aggregate SUM(\"GoldWeight\"). If the user asks for 'money spent on gold', aggregate SUM(\"TransactionAmount\") where CategoryName ILIKE '%Gold%' or LedgerType = 'Investments'.",
+  sqlCondition: "\"GoldWeight\" IS NOT NULL"
+})
+
+// Attach all business rules to the Table
+MATCH (t:Table {name: "SecretTransactions"})
+MATCH (r:BusinessRule)
+CREATE (t)-[:APPLIES_RULE]->(r);
