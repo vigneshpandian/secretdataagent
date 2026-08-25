@@ -5,9 +5,9 @@ A small FastAPI + LangGraph service for turning natural-language questions into 
 ## What this project does
 
 - Accepts a natural-language question through an HTTP endpoint
-- Uses a LangGraph agent with a SQL-generation tool
+- Uses a LangGraph agent to generate PostgreSQL directly from the user request
 - Pulls table metadata and business rules from Neo4j
-- Produces a PostgreSQL query idea based on the schema and prompt context
+- Validates generated SQL as a single, read-only PostgreSQL statement
 - Returns the generated SQL query as part of the API response
 
 ## Requirements
@@ -79,8 +79,24 @@ curl -X POST "http://127.0.0.1:8000/query" \
 ```json
 {
   "query": "Show me the total amount by payment status for this month",
-  "result": "```sql\nSELECT payment_status, SUM(amount) AS total_amount\nFROM SecretTransactions\nWHERE created_at >= DATE_TRUNC('month', CURRENT_DATE)\nGROUP BY payment_status;\n```"
+  "result": "SELECT payment_status, SUM(amount) AS total_amount\nFROM \"SecretTransactions\"\nWHERE created_at >= DATE_TRUNC('month', CURRENT_DATE)\nGROUP BY payment_status;"
 }
+```
+
+The model is instructed to return only executable SQL, without Markdown fences, labels, or explanations.
+
+## Tools
+
+The current workflow binds `validate_sql_query` to the model. It uses `sqlglot` to check PostgreSQL syntax and rejects malformed SQL, multiple statements, and write operations such as `INSERT`, `UPDATE`, `DELETE`, and `DROP`.
+
+`run_sql_query` also validates a query before executing it against PostgreSQL, but it is not currently bound into the LangGraph workflow. Add it to the workflow tool list only when the application should execute generated queries rather than return SQL.
+
+## Run tests
+
+Run the tool tests with:
+
+```bash
+uv run python -m unittest discover -s tests -v
 ```
 
 ## Demo database seed script
@@ -116,6 +132,8 @@ src/
     tools.py
     workflow_graph.py
     graph_schema.txt
+tests/
+  test_tools.py
 ```
 
 ## Troubleshooting

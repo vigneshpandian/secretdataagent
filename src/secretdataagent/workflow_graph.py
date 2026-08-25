@@ -4,7 +4,7 @@ from langchain.chat_models import init_chat_model
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
-from secretdataagent.tools import fetch_database_schema, run_sql_query, generate_sql_query
+from secretdataagent.tools import fetch_database_schema, run_sql_query, generate_sql_query, validate_sql_query
 from secretdataagent.neo4j_retriever import Neo4jRetriever
 from dotenv import load_dotenv
 
@@ -15,7 +15,7 @@ class AgentState(TypedDict):
 
 class LangGraphWorkflow:
     def __init__(self):
-        tools = [generate_sql_query]
+        tools = [validate_sql_query]
         load_dotenv(override=True)
         # Read provider settings from env (Defaults to google_genai / gemini-2.5-flash)
         model_name = os.getenv("LLM_MODEL", "gemini-2.5-flash")
@@ -59,10 +59,8 @@ class LangGraphWorkflow:
             "Below is the database schema, categorical allowed values, and mandatory business rules:\n\n"
             f"=== DATABASE METADATA & RULES ===\n{schema_context}\n=================================\n\n"
             "EXECUTION RULES:\n"
-            "1. First, use `generate_sql_query` to construct a valid PostgreSQL statement adhering to all business rules.\n"
-            "2. FINAL OUTPUT FORMAT:\n"
-            
-            "   - **Generated SQL Query:** Print the SQL statement inside a markdown sql code block (```sql ... ```).\n"
+            "Generate the executable PostgreSQL SQL statement directly.\n"
+            "Return only SQL. Do not include Markdown fences, labels, explanations, or other text.\n"
           
         )
 
